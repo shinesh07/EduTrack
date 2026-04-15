@@ -1,0 +1,16 @@
+{
+  "name": "student-mgmt-system",
+  "version": "1.0.0",
+  "description": "Student Result & Attendance Management System",
+  "scripts": {
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
+    "build": "cd frontend && npm run build",
+    "start": "cd backend && npm start",
+    "seed": "cd backend && npm run seed",
+    "deploy:render": "npm run build && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
