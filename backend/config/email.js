@@ -97,9 +97,13 @@ function verifyButton(url) {
     </div>`;
 }
 
+function getAppUrl(baseUrl) {
+  return (process.env.CLIENT_URL || baseUrl || 'http://localhost:3000').replace(/\/$/, '');
+}
+
 // Sent when a user self-registers via signup page
-async function sendVerificationEmail({ toEmail, name, token, role }) {
-  const url = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
+async function sendVerificationEmail({ toEmail, name, token, role, baseUrl }) {
+  const url = `${getAppUrl(baseUrl)}/verify-email?token=${token}`;
   const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
 
   const body = `
@@ -119,8 +123,8 @@ async function sendVerificationEmail({ toEmail, name, token, role }) {
 }
 
 // Sent when admin creates a teacher/student account
-async function sendAdminCreatedEmail({ toEmail, name, token, role, tempPassword }) {
-  const url = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
+async function sendAdminCreatedEmail({ toEmail, name, token, role, tempPassword, baseUrl }) {
+  const url = `${getAppUrl(baseUrl)}/verify-email?token=${token}`;
   const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
 
   const body = `

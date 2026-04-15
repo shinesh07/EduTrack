@@ -31,4 +31,4 @@ yarn-error.log*
 coverage/
 
 # Accidental malformed folder from brace expansion
-/{backend*
+/[{]backend*

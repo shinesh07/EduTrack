@@ -6,6 +6,7 @@ const Result = require('../models/Result');
 const crypto = require('crypto');
 const { protect, authorize } = require('../middleware/auth');
 const { sendAdminCreatedEmail } = require('../config/email');
+const getBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
 
 // Apply auth to all admin routes
 router.use(protect, authorize('admin'));
@@ -104,7 +105,14 @@ router.post('/teachers', async (req, res) => {
 
     let emailFailed = false;
     try {
-      await sendAdminCreatedEmail({ toEmail: email, name, token: verificationToken, role: 'teacher', tempPassword: password });
+      await sendAdminCreatedEmail({
+        toEmail: email,
+        name,
+        token: verificationToken,
+        role: 'teacher',
+        tempPassword: password,
+        baseUrl: getBaseUrl(req),
+      });
     } catch (emailErr) {
       console.error('Verification email failed:', emailErr.message);
       emailFailed = true;
@@ -235,7 +243,14 @@ router.post('/students', async (req, res) => {
 
     let emailFailed = false;
     try {
-      await sendAdminCreatedEmail({ toEmail: email, name, token: verificationToken, role: 'student', tempPassword: password });
+      await sendAdminCreatedEmail({
+        toEmail: email,
+        name,
+        token: verificationToken,
+        role: 'student',
+        tempPassword: password,
+        baseUrl: getBaseUrl(req),
+      });
     } catch (emailErr) {
       console.error('Verification email failed:', emailErr.message);
       emailFailed = true;
@@ -412,6 +427,7 @@ router.post('/resend-verification/:id', async (req, res) => {
       token: verificationToken,
       role: user.role,
       tempPassword: '(use your existing password)',
+      baseUrl: getBaseUrl(req),
     });
 
     res.status(200).json({ success: true, message: 'Verification email resent successfully.' });

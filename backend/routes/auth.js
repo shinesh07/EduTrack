@@ -8,6 +8,7 @@ const { sendVerificationEmail } = require('../config/email');
 
 const signToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+const getBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
 
 // ── POST /api/auth/signup ──────────────────────────────────────────
 // Self-registration for students and teachers
@@ -61,6 +62,7 @@ router.post('/signup', async (req, res) => {
         name,
         token: verificationToken,
         role: user.role,
+        baseUrl: getBaseUrl(req),
       });
     } catch (emailErr) {
       console.error('Verification email failed:', emailErr.message);
@@ -126,6 +128,7 @@ router.post('/resend-verification', async (req, res) => {
       name: user.name,
       token: verificationToken,
       role: user.role,
+      baseUrl: getBaseUrl(req),
     });
 
     res.status(200).json({

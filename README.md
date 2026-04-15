@@ -160,7 +160,49 @@ Change the password after first login.
 
 - In production, the backend serves the built frontend from `frontend/dist`
 - Run `npm run build` before `npm run start` if you want the backend to serve the frontend
-- Make sure `CLIENT_URL` matches your deployed frontend URL for email verification links
+- Set `CLIENT_URL` if your frontend and backend are deployed on different domains
+
+## Deploy on Render
+
+This repo is set up for a single-service Render deploy where the Express backend serves the built React frontend.
+
+### Recommended setup
+
+- Hosting: Render Web Service
+- Database: MongoDB Atlas
+- Email on Render Free plan: use `BREVO_API_KEY`
+
+### Why Brevo is recommended on Render Free
+
+Render's free web services block outbound SMTP ports, so SMTP-based options like Gmail SMTP or Resend SMTP are not a good fit on the free tier. This project already supports Brevo via HTTPS API, which works well for verification emails.
+
+### Steps
+
+1. Push the repo to GitHub.
+2. In Render, create a new Blueprint or Web Service from this repository.
+3. Use the included `render.yaml` file or these commands:
+
+```bash
+Build Command: npm run install:all && npm run build
+Start Command: npm start
+```
+
+4. Add these environment variables in Render:
+
+- `MONGODB_URI`
+- `JWT_SECRET`
+- `NODE_ENV=production`
+- `BREVO_API_KEY`
+- `EMAIL_FROM`
+
+5. In MongoDB Atlas, add an IP access list entry that allows your deployed app to connect to the database.
+6. Open the deployed URL and verify `/api/health` responds successfully.
+
+### Notes
+
+- If `CLIENT_URL` is not set, the backend now falls back to the current deployed host when generating verification links.
+- If you use a custom domain or split the frontend and backend onto different domains later, set `CLIENT_URL` explicitly.
+- For Atlas deployments, many hobby projects allow `0.0.0.0/0` with a strong database username and password when the hosting IP is not fixed.
 
 ## Email Verification Notes
 
@@ -174,4 +216,3 @@ Change the password after first login.
 - `/api/admin` - admin stats, teacher management, student management, result and attendance access
 - `/api/teacher` - teacher stats, assigned students, attendance, results
 - `/api/student` - student stats, attendance, results, transcript download
-
