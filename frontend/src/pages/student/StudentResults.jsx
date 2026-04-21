@@ -206,9 +206,11 @@ export default function StudentResults() {
                             <div className="flex items-start justify-between gap-2">
                               <div>
                                 <p className="font-semibold text-gray-800">{r.subject}</p>
-                                {r.teacher?.name && (
-                                  <p className="text-xs text-gray-400 mt-0.5">by {r.teacher.name}</p>
-                                )}
+                                <p className="text-xs text-gray-400 mt-0.5">
+                                  {[r.semesterCourse?.code, r.teacher?.name ? `by ${r.teacher.name}` : null]
+                                    .filter(Boolean)
+                                    .join(' · ') || 'Course result'}
+                                </p>
                               </div>
                               <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0
                                 ${r.status === 'pass' ? 'badge-pass' : 'badge-fail'}`}>

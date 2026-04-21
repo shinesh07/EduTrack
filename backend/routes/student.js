@@ -32,6 +32,108 @@ const getTeacherNamesFromCourses = (courses = []) =>
     ),
   ].join(', ') || 'N/A';
 
+const getNumericGradePoint = (result) => {
+  const gradePoint = Number(result?.gradePoint);
+  return Number.isFinite(gradePoint) ? gradePoint : null;
+};
+
+const calculateAverageGradePoint = (results = []) => {
+  const graded = results
+    .map(getNumericGradePoint)
+    .filter((gradePoint) => gradePoint !== null);
+
+  if (graded.length === 0) return null;
+  return graded.reduce((sum, gradePoint) => sum + gradePoint, 0) / graded.length;
+};
+
+const formatGpa = (value) => (value === null ? 'N/A' : value.toFixed(2));
+
+const getResultTotal = (result) => {
+  const marks = result?.marks || {};
+  const totalMarks = result?.totalMarks || {};
+
+  const scored =
+    Number(marks.theory || 0) +
+    Number(marks.practical || 0) +
+    Number(marks.internal || 0);
+  const max =
+    Number(totalMarks.theory || 0) +
+    Number(totalMarks.practical || 0) +
+    Number(totalMarks.internal || 0);
+
+  return { scored, max };
+};
+
+const sortResultsBySemesterAndCourse = (left, right) => {
+  const semesterDiff = Number(left?.semester || 0) - Number(right?.semester || 0);
+  if (semesterDiff !== 0) return semesterDiff;
+
+  const leftCode = String(left?.semesterCourse?.code || '');
+  const rightCode = String(right?.semesterCourse?.code || '');
+  const codeDiff = leftCode.localeCompare(rightCode);
+  if (codeDiff !== 0) return codeDiff;
+
+  return String(left?.subject || '').localeCompare(String(right?.subject || ''));
+};
+
+const buildSemesterSummaries = (results = []) => {
+  const groupedBySemester = new Map();
+
+  [...results]
+    .sort(sortResultsBySemesterAndCourse)
+    .forEach((result) => {
+      const semester = Number(result?.semester || 0);
+      if (!semester) return;
+
+      if (!groupedBySemester.has(semester)) {
+        groupedBySemester.set(semester, {
+          semester,
+          academicYear: result?.academicYear || 'N/A',
+          results: [],
+          gradePointTotal: 0,
+          gradedCount: 0,
+        });
+      }
+
+      const summary = groupedBySemester.get(semester);
+      summary.results.push(result);
+
+      const gradePoint = getNumericGradePoint(result);
+      if (gradePoint !== null) {
+        summary.gradePointTotal += gradePoint;
+        summary.gradedCount += 1;
+      }
+    });
+
+  let cumulativeGradePoints = 0;
+  let cumulativeCount = 0;
+
+  return Array.from(groupedBySemester.values())
+    .sort((left, right) => left.semester - right.semester)
+    .map((summary) => {
+      cumulativeGradePoints += summary.gradePointTotal;
+      cumulativeCount += summary.gradedCount;
+
+      return {
+        ...summary,
+        sgpa:
+          summary.gradedCount > 0
+            ? summary.gradePointTotal / summary.gradedCount
+            : null,
+        runningCgpa:
+          cumulativeCount > 0 ? cumulativeGradePoints / cumulativeCount : null,
+      };
+    });
+};
+
+const ensurePdfSpace = (doc, yPos, requiredHeight, bottomMargin = 70) => {
+  if (yPos + requiredHeight > doc.page.height - bottomMargin) {
+    doc.addPage();
+    return 50;
+  }
+  return yPos;
+};
+
 router.get('/semester-overview', async (req, res) => {
   try {
     const [settings, courses] = await Promise.all([
@@ -276,25 +378,33 @@ router.get('/attendance/today', async (req, res) => {
 router.get('/results', async (req, res) => {
   try {
     const { semester, academicYear } = req.query;
+    const currentSemester = Number(req.user.semester || 0);
 
     const filter = { student: req.user._id };
-    if (semester) filter.semester = semester;
     if (academicYear) filter.academicYear = academicYear;
+
+    if (semester) {
+      const requestedSemester = Number(semester);
+      filter.semester =
+        requestedSemester > 0 && requestedSemester < currentSemester
+          ? requestedSemester
+          : { $lt: 1 };
+    } else if (currentSemester > 1) {
+      filter.semester = { $lt: currentSemester };
+    } else {
+      filter.semester = { $lt: 1 };
+    }
 
     const results = await Result.find(filter)
       .populate('teacher', 'name')
+      .populate('semesterCourse', 'code')
       .sort({ semester: 1, subject: 1 });
 
-    let totalGradePoints = 0;
-    let count = 0;
-    results.forEach((result) => {
-      if (result.gradePoint !== undefined) {
-        totalGradePoints += result.gradePoint;
-        count += 1;
-      }
-    });
-
-    const cgpa = count > 0 ? (totalGradePoints / count).toFixed(2) : 'N/A';
+    const cgpaSource =
+      semester || academicYear
+        ? await Result.find({ student: req.user._id }).select('gradePoint')
+        : results;
+    const cgpa = formatGpa(calculateAverageGradePoint(cgpaSource));
 
     res.status(200).json({ success: true, data: results, cgpa });
   } catch (error) {
@@ -304,28 +414,24 @@ router.get('/results', async (req, res) => {
 
 router.get('/transcript', async (req, res) => {
   try {
-    const student = await User.findById(req.user._id).select('-password');
-    const currentCourses = await getCurrentSemesterCourses(student);
+    const student = await User.findById(req.user._id).select('-password').lean();
+    const currentSemester = Number(student?.semester || 0);
+    const [currentCourses, results, attendanceRecords] = await Promise.all([
+      getCurrentSemesterCourses(student),
+      Result.find({ student: req.user._id })
+        .populate('teacher', 'name')
+        .populate('semesterCourse', 'code')
+        .sort({ semester: 1, subject: 1 })
+        .lean(),
+      Attendance.find({ student: req.user._id }).lean(),
+    ]);
 
-    const results = await Result.find({ student: req.user._id })
-      .populate('teacher', 'name')
-      .sort({ semester: 1, subject: 1 });
-
-    const attendanceRecords = await Attendance.find({ student: req.user._id });
-
-    let totalGradePoints = 0;
-    let subjectCount = 0;
-    results.forEach((result) => {
-      if (result.gradePoint !== undefined) {
-        totalGradePoints += result.gradePoint;
-        subjectCount += 1;
-      }
-    });
-
-    const cgpa =
-      subjectCount > 0
-        ? (totalGradePoints / subjectCount).toFixed(2)
-        : 'N/A';
+    const completedResults = results.filter(
+      (result) => Number(result?.semester || 0) < currentSemester
+    );
+    const semesterSummaries = buildSemesterSummaries(completedResults);
+    const subjectCount = completedResults.length;
+    const finalCgpa = formatGpa(calculateAverageGradePoint(completedResults));
 
     const totalAttendance = attendanceRecords.length;
     const presentAttendance = attendanceRecords.filter(
@@ -335,12 +441,6 @@ router.get('/transcript', async (req, res) => {
       totalAttendance > 0
         ? Math.round((presentAttendance / totalAttendance) * 100)
         : 0;
-
-    const semesterMap = {};
-    results.forEach((result) => {
-      if (!semesterMap[result.semester]) semesterMap[result.semester] = [];
-      semesterMap[result.semester].push(result);
-    });
 
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
 
@@ -403,7 +503,7 @@ router.get('/transcript', async (req, res) => {
     ];
     const rightInfo = [
       ['Department', student.department || 'N/A'],
-      ['Semester', student.semester ? `Semester ${student.semester}` : 'N/A'],
+      ['Current Semester', student.semester ? `S${student.semester}` : 'N/A'],
       ['Current Teachers', getTeacherNamesFromCourses(currentCourses)],
     ];
 
@@ -430,12 +530,12 @@ router.get('/transcript', async (req, res) => {
       .fillColor('#f0a500')
       .fontSize(22)
       .font('Helvetica-Bold')
-      .text(cgpa, 50, summaryY + 12, { width: 150, align: 'center' });
+      .text(finalCgpa, 50, summaryY + 12, { width: 150, align: 'center' });
     doc
       .fillColor('#aaaaaa')
       .fontSize(9)
       .font('Helvetica')
-      .text('CGPA', 50, summaryY + 45, { width: 150, align: 'center' });
+      .text('FINAL CGPA', 50, summaryY + 45, { width: 150, align: 'center' });
 
     doc.rect(215, summaryY, 150, 70).fillAndStroke('#0a1628', '#0a1628');
     doc
@@ -460,7 +560,7 @@ router.get('/transcript', async (req, res) => {
       .fillColor('#f0a500')
       .fontSize(22)
       .font('Helvetica-Bold')
-      .text(subjectCount.toString(), 380, summaryY + 12, {
+      .text(semesterSummaries.length.toString(), 380, summaryY + 12, {
         width: 170,
         align: 'center',
       });
@@ -468,7 +568,7 @@ router.get('/transcript', async (req, res) => {
       .fillColor('#aaaaaa')
       .fontSize(9)
       .font('Helvetica')
-      .text('SUBJECTS COMPLETED', 380, summaryY + 45, {
+      .text('SEMESTERS COVERED', 380, summaryY + 45, {
         width: 170,
         align: 'center',
       });
@@ -483,119 +583,151 @@ router.get('/transcript', async (req, res) => {
 
     yPos += 25;
 
-    const semesters = Object.keys(semesterMap).sort((a, b) => a - b);
+    const transcriptColumns = [
+      { label: 'Code', x: 60, width: 70, align: 'left' },
+      { label: 'Course', x: 135, width: 200, align: 'left' },
+      { label: 'Total', x: 340, width: 55, align: 'center' },
+      { label: 'Grade', x: 400, width: 35, align: 'center' },
+      { label: 'GP', x: 440, width: 30, align: 'center' },
+      { label: 'Status', x: 475, width: 60, align: 'center' },
+    ];
 
-    for (const sem of semesters) {
-      if (yPos > doc.page.height - 150) {
-        doc.addPage();
-        yPos = 50;
-      }
+    semesterSummaries.forEach((summary) => {
+      const sectionHeight = 74 + summary.results.length * 22 + 36;
+      yPos = ensurePdfSpace(doc, yPos, sectionHeight);
 
-      doc.rect(50, yPos, doc.page.width - 100, 25).fill('#e8edf5');
+      doc.rect(50, yPos, doc.page.width - 100, 36).fill('#e8edf5');
       doc
         .fillColor('#0a1628')
         .fontSize(11)
         .font('Helvetica-Bold')
-        .text(`Semester ${sem}`, 60, yPos + 7);
-      yPos += 25;
+        .text(`Semester ${summary.semester}`, 60, yPos + 8);
+      doc
+        .fillColor('#56657a')
+        .fontSize(8)
+        .font('Helvetica')
+        .text(`Academic Year: ${summary.academicYear}`, 60, yPos + 22);
+      doc
+        .fillColor('#0a1628')
+        .fontSize(8)
+        .font('Helvetica-Bold')
+        .text(`SGPA: ${formatGpa(summary.sgpa)}`, 325, yPos + 8, {
+          width: 95,
+          align: 'right',
+        });
+      doc
+        .fillColor('#0a1628')
+        .fontSize(8)
+        .font('Helvetica-Bold')
+        .text(`CGPA Till S${summary.semester}: ${formatGpa(summary.runningCgpa)}`, 400, yPos + 8, {
+          width: 135,
+          align: 'right',
+        });
 
-      doc.rect(50, yPos, doc.page.width - 100, 22).fill('#0a1628');
-      const cols = [60, 220, 280, 340, 390, 430, 480, 520];
-      const headers = [
-        'Subject',
-        'Theory',
-        'Practical',
-        'Internal',
-        'Total',
-        'Grade',
-        'GP',
-        'Status',
-      ];
+      yPos += 36;
 
-      headers.forEach((header, index) => {
+      doc.rect(50, yPos, doc.page.width - 100, 20).fill('#0a1628');
+      transcriptColumns.forEach((column) => {
         doc
           .fillColor('#f0a500')
           .fontSize(8)
           .font('Helvetica-Bold')
-          .text(header, cols[index], yPos + 7);
+          .text(column.label, column.x, yPos + 6, {
+            width: column.width,
+            align: column.align,
+          });
       });
-      yPos += 22;
+      yPos += 20;
 
-      semesterMap[sem].forEach((result, index) => {
-        if (yPos > doc.page.height - 100) {
-          doc.addPage();
-          yPos = 50;
-        }
-
+      summary.results.forEach((result, index) => {
+        const { scored, max } = getResultTotal(result);
         const rowColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
-        doc.rect(50, yPos, doc.page.width - 100, 20).fill(rowColor);
-
-        const total =
-          result.marks.theory + result.marks.practical + result.marks.internal;
-        const maxTotal =
-          result.totalMarks.theory +
-          result.totalMarks.practical +
-          result.totalMarks.internal;
-
-        const rowData = [
+        const rowValues = [
+          result?.semesterCourse?.code || 'N/A',
           result.subject,
-          `${result.marks.theory}/${result.totalMarks.theory}`,
-          `${result.marks.practical}/${result.totalMarks.practical}`,
-          `${result.marks.internal}/${result.totalMarks.internal}`,
-          `${total}/${maxTotal}`,
+          `${scored}/${max}`,
           result.grade || '-',
-          result.gradePoint !== undefined ? result.gradePoint.toString() : '-',
-          result.status.toUpperCase(),
+          getNumericGradePoint(result)?.toString() || '-',
+          String(result.status || '-').toUpperCase(),
         ];
 
-        rowData.forEach((value, rowIndex) => {
-          let color = '#333333';
-          if (rowIndex === 7) {
+        doc.rect(50, yPos, doc.page.width - 100, 22).fill(rowColor);
+
+        rowValues.forEach((value, columnIndex) => {
+          const column = transcriptColumns[columnIndex];
+          let color = '#334155';
+
+          if (column.label === 'Grade') color = '#0a1628';
+          if (column.label === 'Status') {
             color = result.status === 'pass' ? '#2e7d32' : '#c62828';
           }
-          if (rowIndex === 5) color = '#0a1628';
 
           doc
             .fillColor(color)
             .fontSize(8)
             .font('Helvetica')
-            .text(value, cols[rowIndex], yPos + 6, {
-              width: rowIndex === 0 ? 155 : 55,
+            .text(value, column.x, yPos + 7, {
+              width: column.width,
+              align: column.align,
               ellipsis: true,
             });
         });
 
-        yPos += 20;
+        yPos += 22;
       });
-
-      const semResults = semesterMap[sem];
-      const sgpa = (
-        semResults.reduce((acc, result) => acc + (result.gradePoint || 0), 0) /
-        semResults.length
-      ).toFixed(2);
 
       doc
         .fillColor('#555555')
         .fontSize(9)
         .font('Helvetica-Bold')
-        .text(`Semester GPA: ${sgpa}`, 50, yPos + 5, {
-          align: 'right',
-          width: doc.page.width - 100,
-        });
-      yPos += 25;
-    }
+        .text(
+          `Semester SGPA: ${formatGpa(summary.sgpa)}   •   CGPA Till Semester ${summary.semester}: ${formatGpa(summary.runningCgpa)}   •   Courses: ${summary.results.length}`,
+          50,
+          yPos + 5,
+          {
+            align: 'right',
+            width: doc.page.width - 100,
+          }
+        );
+      yPos += 24;
+    });
 
-    if (results.length === 0) {
+    if (completedResults.length === 0) {
       doc
         .fillColor('#888888')
         .fontSize(11)
         .font('Helvetica')
-        .text('No results available yet.', 50, yPos + 10, { align: 'center' });
+        .text('No completed semester results available yet.', 50, yPos + 10, {
+          align: 'center',
+        });
       yPos += 40;
     }
 
-    if (yPos > doc.page.height - 80) {
-      doc.addPage();
+    if (completedResults.length > 0) {
+      yPos = ensurePdfSpace(doc, yPos, 70);
+      doc.rect(50, yPos, doc.page.width - 100, 55).fillAndStroke('#0a1628', '#0a1628');
+      doc
+        .fillColor('#f0a500')
+        .fontSize(18)
+        .font('Helvetica-Bold')
+        .text(`Final CGPA: ${finalCgpa}`, 50, yPos + 12, {
+          width: doc.page.width - 100,
+          align: 'center',
+        });
+      doc
+        .fillColor('#d1d5db')
+        .fontSize(9)
+        .font('Helvetica')
+        .text(
+          `Semesters covered: ${semesterSummaries.length}   •   Courses completed: ${subjectCount}`,
+          50,
+          yPos + 34,
+          {
+            width: doc.page.width - 100,
+            align: 'center',
+          }
+        );
+      yPos += 70;
     }
 
     doc

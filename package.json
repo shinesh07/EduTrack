@@ -8,6 +8,7 @@
     "build": "cd frontend && npm run build",
     "start": "cd backend && npm start",
     "seed": "cd backend && npm run seed",
+    "seed:demo": "cd backend && npm run seed:demo",
     "deploy:render": "npm run build && npm start"
   },
   "devDependencies": {
