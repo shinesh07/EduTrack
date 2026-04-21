@@ -3,6 +3,19 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --et-navy: #0a1628;
+    --et-ink: #14244b;
+    --et-mist: #eef3fb;
+    --et-cream: #fff7e4;
+    --et-gold: #f0a500;
+    --et-line: rgba(10, 22, 40, 0.08);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
   * {
     box-sizing: border-box;
     margin: 0;
@@ -11,10 +24,15 @@
 
   body {
     font-family: 'IBM Plex Sans', sans-serif;
-    background-color: #f0f2f7;
+    background-color: var(--et-mist);
     color: #0a1628;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: rgba(240, 165, 0, 0.22);
+    color: #0a1628;
   }
 
   h1, h2, h3 {
