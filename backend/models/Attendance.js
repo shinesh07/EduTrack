@@ -12,6 +12,11 @@ const attendanceSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    semesterCourse: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SemesterCourse',
+      default: null,
+    },
     subject: {
       type: String,
       required: [true, 'Subject is required'],

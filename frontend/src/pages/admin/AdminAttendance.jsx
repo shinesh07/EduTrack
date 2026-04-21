@@ -2,17 +2,27 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../utils/api';
 
+const emptyFilters = {
+  studentId: '',
+  teacherId: '',
+  subject: '',
+  startDate: '',
+  endDate: '',
+};
+
 export default function AdminAttendance() {
   const [records, setRecords] = useState([]);
   const [students, setStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ studentId: '', teacherId: '', subject: '', startDate: '', endDate: '' });
+  const [filters, setFilters] = useState(emptyFilters);
 
-  const fetchRecords = async () => {
+  const fetchRecords = async (nextFilters = filters) => {
     setLoading(true);
     try {
-      const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
+      const params = Object.fromEntries(
+        Object.entries(nextFilters).filter(([, v]) => v)
+      );
       const r = await api.get('/admin/attendance', { params });
       setRecords(r.data.data);
     } catch {
@@ -79,7 +89,15 @@ export default function AdminAttendance() {
         </div>
         <div className="flex gap-3 mt-4">
           <button onClick={fetchRecords} className="btn-primary">Apply Filters</button>
-          <button onClick={() => { setFilters({ studentId: '', teacherId: '', subject: '', startDate: '', endDate: '' }); fetchRecords(); }} className="btn-secondary">Clear</button>
+          <button
+            onClick={() => {
+              setFilters(emptyFilters);
+              fetchRecords(emptyFilters);
+            }}
+            className="btn-secondary"
+          >
+            Clear
+          </button>
         </div>
       </div>
 

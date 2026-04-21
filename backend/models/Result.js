@@ -1,5 +1,55 @@
 const mongoose = require('mongoose');
 
+const MARK_FIELDS = ['theory', 'practical', 'internal'];
+const DEFAULT_MARKS = { theory: 0, practical: 0, internal: 0 };
+const DEFAULT_TOTAL_MARKS = { theory: 100, practical: 50, internal: 30 };
+
+const normalizeScoreSet = (value = {}, defaults = {}) =>
+  MARK_FIELDS.reduce((accumulator, field) => {
+    const rawValue = value?.[field] ?? defaults?.[field] ?? 0;
+    const numericValue = Number(rawValue);
+    accumulator[field] = Number.isFinite(numericValue) ? numericValue : 0;
+    return accumulator;
+  }, {});
+
+const calculateResultOutcome = (marksInput, totalMarksInput) => {
+  const marks = normalizeScoreSet(marksInput, DEFAULT_MARKS);
+  const totalMarks = normalizeScoreSet(totalMarksInput, DEFAULT_TOTAL_MARKS);
+
+  const total = MARK_FIELDS.reduce((sum, field) => sum + marks[field], 0);
+  const maxTotal = MARK_FIELDS.reduce((sum, field) => sum + totalMarks[field], 0);
+
+  if (maxTotal <= 0) {
+    return { grade: undefined, gradePoint: undefined, status: 'pending' };
+  }
+
+  const percentage = (total / maxTotal) * 100;
+
+  if (percentage >= 90) {
+    return { grade: 'A+', gradePoint: 10, status: 'pass' };
+  }
+  if (percentage >= 80) {
+    return { grade: 'A', gradePoint: 9, status: 'pass' };
+  }
+  if (percentage >= 70) {
+    return { grade: 'B+', gradePoint: 8, status: 'pass' };
+  }
+  if (percentage >= 60) {
+    return { grade: 'B', gradePoint: 7, status: 'pass' };
+  }
+  if (percentage >= 50) {
+    return { grade: 'C+', gradePoint: 6, status: 'pass' };
+  }
+  if (percentage >= 45) {
+    return { grade: 'C', gradePoint: 5, status: 'pass' };
+  }
+  if (percentage >= 40) {
+    return { grade: 'D', gradePoint: 4, status: 'pass' };
+  }
+
+  return { grade: 'F', gradePoint: 0, status: 'fail' };
+};
+
 const resultSchema = new mongoose.Schema(
   {
     student: {
@@ -11,6 +61,11 @@ const resultSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+    },
+    semesterCourse: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SemesterCourse',
+      default: null,
     },
     subject: {
       type: String,
@@ -60,43 +115,50 @@ const resultSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto-calculate grade before saving
 resultSchema.pre('save', function (next) {
-  const total =
-    this.marks.theory + this.marks.practical + this.marks.internal;
-  const maxTotal =
-    this.totalMarks.theory +
-    this.totalMarks.practical +
-    this.totalMarks.internal;
-  const percentage = (total / maxTotal) * 100;
+  Object.assign(this, calculateResultOutcome(this.marks, this.totalMarks));
+  next();
+});
 
-  if (percentage >= 90) {
-    this.grade = 'A+';
-    this.gradePoint = 10;
-  } else if (percentage >= 80) {
-    this.grade = 'A';
-    this.gradePoint = 9;
-  } else if (percentage >= 70) {
-    this.grade = 'B+';
-    this.gradePoint = 8;
-  } else if (percentage >= 60) {
-    this.grade = 'B';
-    this.gradePoint = 7;
-  } else if (percentage >= 50) {
-    this.grade = 'C+';
-    this.gradePoint = 6;
-  } else if (percentage >= 45) {
-    this.grade = 'C';
-    this.gradePoint = 5;
-  } else if (percentage >= 40) {
-    this.grade = 'D';
-    this.gradePoint = 4;
-  } else {
-    this.grade = 'F';
-    this.gradePoint = 0;
+resultSchema.pre('findOneAndUpdate', async function (next) {
+  const update = this.getUpdate() || {};
+  const usesOperators = Object.keys(update).some((key) => key.startsWith('$'));
+  const marksUpdate = update.$set?.marks ?? update.marks;
+  const totalMarksUpdate = update.$set?.totalMarks ?? update.totalMarks;
+
+  if (!marksUpdate && !totalMarksUpdate) {
+    return next();
   }
 
-  this.status = percentage >= 40 ? 'pass' : 'fail';
+  const existing = await this.model
+    .findOne(this.getQuery())
+    .select('marks totalMarks')
+    .lean();
+
+  const mergedMarks = normalizeScoreSet(
+    marksUpdate,
+    existing?.marks || DEFAULT_MARKS
+  );
+  const mergedTotalMarks = normalizeScoreSet(
+    totalMarksUpdate,
+    existing?.totalMarks || DEFAULT_TOTAL_MARKS
+  );
+  const outcome = calculateResultOutcome(mergedMarks, mergedTotalMarks);
+
+  if (usesOperators) {
+    update.$set = {
+      ...(update.$set || {}),
+      grade: outcome.grade,
+      gradePoint: outcome.gradePoint,
+      status: outcome.status,
+    };
+  } else {
+    update.grade = outcome.grade;
+    update.gradePoint = outcome.gradePoint;
+    update.status = outcome.status;
+  }
+
+  this.setUpdate(update);
   next();
 });
 

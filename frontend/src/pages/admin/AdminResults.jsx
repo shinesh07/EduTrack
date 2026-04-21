@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../utils/api';
 
+const emptyFilters = {
+  studentId: '',
+  teacherId: '',
+  semester: '',
+  academicYear: '',
+};
+
 const gradeColor = {
   'A+': 'bg-emerald-100 text-emerald-800', A: 'bg-green-100 text-green-800',
   'B+': 'bg-blue-100 text-blue-800', B: 'bg-blue-50 text-blue-700',
@@ -14,12 +21,14 @@ export default function AdminResults() {
   const [students, setStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ studentId: '', teacherId: '', semester: '', academicYear: '' });
+  const [filters, setFilters] = useState(emptyFilters);
 
-  const fetchResults = async () => {
+  const fetchResults = async (nextFilters = filters) => {
     setLoading(true);
     try {
-      const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
+      const params = Object.fromEntries(
+        Object.entries(nextFilters).filter(([, v]) => v)
+      );
       const r = await api.get('/admin/results', { params });
       setResults(r.data.data);
     } catch {
@@ -84,7 +93,15 @@ export default function AdminResults() {
         </div>
         <div className="flex gap-3 mt-4">
           <button onClick={fetchResults} className="btn-primary">Apply Filters</button>
-          <button onClick={() => { setFilters({ studentId: '', teacherId: '', semester: '', academicYear: '' }); fetchResults(); }} className="btn-secondary">Clear</button>
+          <button
+            onClick={() => {
+              setFilters(emptyFilters);
+              fetchResults(emptyFilters);
+            }}
+            className="btn-secondary"
+          >
+            Clear
+          </button>
         </div>
       </div>
 

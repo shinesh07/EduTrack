@@ -10,14 +10,17 @@ import ManageTeachers from './pages/admin/ManageTeachers';
 import ManageStudents from './pages/admin/ManageStudents';
 import AdminAttendance from './pages/admin/AdminAttendance';
 import AdminResults from './pages/admin/AdminResults';
+import AdminSemesterCourses from './pages/admin/AdminSemesterCourses';
 import TeacherLayout from './pages/teacher/TeacherLayout';
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
+import TeacherCourses from './pages/teacher/TeacherCourses';
 import TeacherStudents from './pages/teacher/TeacherStudents';
 import TeacherAttendance from './pages/teacher/TeacherAttendance';
 import TeacherResults from './pages/teacher/TeacherResults';
 import StudentLayout from './pages/student/StudentLayout';
 import StudentDashboard from './pages/student/StudentDashboard';
 import StudentAttendance from './pages/student/StudentAttendance';
+import StudentCourses from './pages/student/StudentCourses';
 import StudentResults from './pages/student/StudentResults';
 
 function RequireAuth({ children, role }) {
@@ -59,6 +62,7 @@ export default function App() {
         <Route index element={<AdminDashboard />} />
         <Route path="teachers" element={<ManageTeachers />} />
         <Route path="students" element={<ManageStudents />} />
+        <Route path="semester-courses" element={<AdminSemesterCourses />} />
         <Route path="attendance" element={<AdminAttendance />} />
         <Route path="results" element={<AdminResults />} />
       </Route>
@@ -69,6 +73,7 @@ export default function App() {
         element={<RequireAuth role="teacher"><TeacherLayout /></RequireAuth>}
       >
         <Route index element={<TeacherDashboard />} />
+        <Route path="courses" element={<TeacherCourses />} />
         <Route path="students" element={<TeacherStudents />} />
         <Route path="attendance" element={<TeacherAttendance />} />
         <Route path="results" element={<TeacherResults />} />
@@ -80,6 +85,7 @@ export default function App() {
         element={<RequireAuth role="student"><StudentLayout /></RequireAuth>}
       >
         <Route index element={<StudentDashboard />} />
+        <Route path="courses" element={<StudentCourses />} />
         <Route path="attendance" element={<StudentAttendance />} />
         <Route path="results" element={<StudentResults />} />
       </Route>

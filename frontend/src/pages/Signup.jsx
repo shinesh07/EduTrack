@@ -2,17 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
-
-const departmentOptions = [
-  'Computer Science',
-  'Information Technology',
-  'Electronics & Communication',
-  'Electrical Engineering',
-  'Mechanical Engineering',
-  'Civil Engineering',
-  'Business Administration',
-  'Mathematics',
-];
+import { DEPARTMENT_OPTIONS } from '../constants/departments';
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -29,7 +19,6 @@ export default function Signup() {
     semester: '',
     rollNumber: '',
     phone: '',
-    subjects: '',
   });
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
@@ -61,10 +50,6 @@ export default function Signup() {
         semester: form.semester ? Number(form.semester) : undefined,
         rollNumber: form.rollNumber || undefined,
         phone: form.phone || undefined,
-        subjects:
-          form.role === 'teacher'
-            ? form.subjects.split(',').map((s) => s.trim()).filter(Boolean)
-            : undefined,
       });
       setStep('success');
     } catch (err) {
@@ -253,7 +238,7 @@ export default function Signup() {
                   className="input-field"
                 >
                   <option value="">Select department</option>
-                  {departmentOptions.map((department) => (
+                  {DEPARTMENT_OPTIONS.map((department) => (
                     <option key={department} value={department}>
                       {department}
                     </option>
@@ -293,16 +278,12 @@ export default function Signup() {
 
             {form.role === 'teacher' && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Courses / Subjects</label>
-                <input
-                  name="subjects"
-                  value={form.subjects}
-                  onChange={handleChange}
-                  className="input-field"
-                  placeholder="Data Structures, Algorithms, DBMS"
-                />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Course Assignment</label>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                  After signup, admins assign teachers to semester courses from the semester setup page.
+                </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  Add one or more courses separated by commas.
+                  You only need your basic account details here.
                 </p>
               </div>
             )}

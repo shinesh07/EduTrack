@@ -1,22 +1,128 @@
 const express = require('express');
 const router = express.Router();
 const PDFDocument = require('pdfkit');
+
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Result = require('../models/Result');
+const SemesterCourse = require('../models/SemesterCourse');
 const { protect, authorize } = require('../middleware/auth');
+const {
+  getAcademicSettings,
+  getSemesterCourses,
+  getUniqueTeacherIds,
+  normalizeDepartmentKey,
+} = require('../utils/academic');
 
 router.use(protect, authorize('student'));
 
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+const getCurrentSemesterCourses = (student, populateTeacher = true) =>
+  getSemesterCourses({
+    department: student.department,
+    semester: student.semester,
+    populateTeacher,
+  });
+
+const getTeacherNamesFromCourses = (courses = []) =>
+  [
+    ...new Set(
+      courses
+        .map((course) => course?.teacher?.name)
+        .filter(Boolean)
+    ),
+  ].join(', ') || 'N/A';
+
+router.get('/semester-overview', async (req, res) => {
+  try {
+    const [settings, courses] = await Promise.all([
+      getAcademicSettings(),
+      getCurrentSemesterCourses(req.user),
+    ]);
+
+    const nextSemester =
+      req.user.semester && Number(req.user.semester) < 8
+        ? Number(req.user.semester) + 1
+        : null;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        department: req.user.department,
+        semester: req.user.semester,
+        nextSemester,
+        canChangeSemester:
+          Boolean(settings.allowStudentSemesterEdit) && Boolean(nextSemester),
+        semesterEditEnabled: settings.allowStudentSemesterEdit,
+        courses,
+        teacherCount: getUniqueTeacherIds(courses).length,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/semester/promote', async (req, res) => {
+  try {
+    const settings = await getAcademicSettings();
+
+    if (!settings.allowStudentSemesterEdit) {
+      return res.status(403).json({
+        success: false,
+        message: 'Semester changes are currently locked by the admin.',
+      });
+    }
+
+    const currentSemester = Number(req.user.semester || 0);
+    if (!currentSemester || currentSemester >= 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot move to the next semester from your current semester.',
+      });
+    }
+
+    const nextSemester = currentSemester + 1;
+    const nextSemesterCourses = await getSemesterCourses({
+      department: req.user.department,
+      semester: nextSemester,
+      populateTeacher: true,
+    });
+
+    if (nextSemesterCourses.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'The next semester course list has not been configured by the admin yet.',
+      });
+    }
+
+    const student = await User.findByIdAndUpdate(
+      req.user._id,
+      { semester: nextSemester },
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    res.status(200).json({
+      success: true,
+      message: `Semester updated to Semester ${nextSemester}. Courses were assigned automatically.`,
+      data: {
+        user: student,
+        courses: nextSemesterCourses,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 router.get('/stats', async (req, res) => {
   try {
     const studentId = req.user._id;
 
-    const [attendanceCount, resultCount] = await Promise.all([
+    const [attendanceCount, resultCount, currentCourses] = await Promise.all([
       Attendance.countDocuments({ student: studentId }),
       Result.countDocuments({ student: studentId }),
+      getCurrentSemesterCourses(req.user),
     ]);
 
     const presentCount = await Attendance.countDocuments({
@@ -34,12 +140,6 @@ router.get('/stats', async (req, res) => {
       .limit(5)
       .populate('teacher', 'name');
 
-    const teacher = req.user.assignedTeacher
-      ? await User.findById(req.user.assignedTeacher).select(
-          'name email department subjects'
-        )
-      : null;
-
     res.status(200).json({
       success: true,
       data: {
@@ -47,7 +147,9 @@ router.get('/stats', async (req, res) => {
         attendanceRate,
         resultCount,
         recentResults,
-        teacher,
+        courses: currentCourses,
+        teacherCount: getUniqueTeacherIds(currentCourses).length,
+        courseCount: currentCourses.length,
       },
     });
   } catch (error) {
@@ -55,9 +157,6 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// ─── ATTENDANCE ───────────────────────────────────────────────────────────────
-
-// GET /api/student/attendance — student views their own attendance
 router.get('/attendance', async (req, res) => {
   try {
     const { subject, startDate, endDate } = req.query;
@@ -74,14 +173,13 @@ router.get('/attendance', async (req, res) => {
       .populate('teacher', 'name')
       .sort({ date: -1 });
 
-    // Summary by subject
     const summary = {};
-    records.forEach((r) => {
-      if (!summary[r.subject]) {
-        summary[r.subject] = { total: 0, present: 0, absent: 0, late: 0 };
+    records.forEach((record) => {
+      if (!summary[record.subject]) {
+        summary[record.subject] = { total: 0, present: 0, absent: 0, late: 0 };
       }
-      summary[r.subject].total++;
-      summary[r.subject][r.status]++;
+      summary[record.subject].total += 1;
+      summary[record.subject][record.status] += 1;
     });
 
     res.status(200).json({ success: true, data: records, summary });
@@ -90,51 +188,66 @@ router.get('/attendance', async (req, res) => {
   }
 });
 
-// POST /api/student/attendance — student self-marks attendance (today only)
 router.post('/attendance', async (req, res) => {
   try {
-    const { subject, status } = req.body;
+    const { semesterCourseId, status } = req.body;
 
-    if (!subject) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Subject is required.' });
-    }
-
-    // Get the student's teacher
-    if (!req.user.assignedTeacher) {
+    if (!semesterCourseId) {
       return res.status(400).json({
         success: false,
-        message: 'No teacher assigned. Contact admin.',
+        message: 'Semester course is required.',
       });
     }
 
-    // Only allow marking for today
+    const course = await SemesterCourse.findOne({
+      _id: semesterCourseId,
+      departmentKey: normalizeDepartmentKey(req.user.department),
+      semester: req.user.semester,
+      isActive: true,
+    }).populate('teacher', 'name');
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'This course is not available in your current semester.',
+      });
+    }
+
+    if (!course.teacher) {
+      return res.status(400).json({
+        success: false,
+        message: 'This course does not have a teacher assigned yet.',
+      });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const existing = await Attendance.findOne({
       student: req.user._id,
-      subject,
+      subject: course.title,
       date: today,
     });
 
     if (existing) {
       return res.status(400).json({
         success: false,
-        message: 'Attendance already marked for this subject today.',
+        message: 'Attendance already marked for this course today.',
         data: existing,
       });
     }
 
     const attendance = await Attendance.create({
       student: req.user._id,
-      teacher: req.user.assignedTeacher,
-      subject,
+      teacher: course.teacher._id,
+      semesterCourse: course._id,
+      subject: course.title,
       date: today,
       status: status || 'present',
       markedBy: 'student',
     });
+
+    await attendance.populate('teacher', 'name');
 
     res.status(201).json({ success: true, data: attendance });
   } catch (error) {
@@ -142,7 +255,6 @@ router.post('/attendance', async (req, res) => {
   }
 });
 
-// GET /api/student/attendance/today — check today's attendance
 router.get('/attendance/today', async (req, res) => {
   try {
     const today = new Date();
@@ -161,9 +273,6 @@ router.get('/attendance/today', async (req, res) => {
   }
 });
 
-// ─── RESULTS ──────────────────────────────────────────────────────────────────
-
-// GET /api/student/results
 router.get('/results', async (req, res) => {
   try {
     const { semester, academicYear } = req.query;
@@ -176,15 +285,15 @@ router.get('/results', async (req, res) => {
       .populate('teacher', 'name')
       .sort({ semester: 1, subject: 1 });
 
-    // Calculate CGPA
     let totalGradePoints = 0;
     let count = 0;
-    results.forEach((r) => {
-      if (r.gradePoint !== undefined) {
-        totalGradePoints += r.gradePoint;
-        count++;
+    results.forEach((result) => {
+      if (result.gradePoint !== undefined) {
+        totalGradePoints += result.gradePoint;
+        count += 1;
       }
     });
+
     const cgpa = count > 0 ? (totalGradePoints / count).toFixed(2) : 'N/A';
 
     res.status(200).json({ success: true, data: results, cgpa });
@@ -193,15 +302,10 @@ router.get('/results', async (req, res) => {
   }
 });
 
-// ─── TRANSCRIPT PDF ───────────────────────────────────────────────────────────
-
-// GET /api/student/transcript — download transcript PDF
 router.get('/transcript', async (req, res) => {
   try {
-    const student = await User.findById(req.user._id).populate(
-      'assignedTeacher',
-      'name department'
-    );
+    const student = await User.findById(req.user._id).select('-password');
+    const currentCourses = await getCurrentSemesterCourses(student);
 
     const results = await Result.find({ student: req.user._id })
       .populate('teacher', 'name')
@@ -209,15 +313,15 @@ router.get('/transcript', async (req, res) => {
 
     const attendanceRecords = await Attendance.find({ student: req.user._id });
 
-    // Calculate stats
     let totalGradePoints = 0;
     let subjectCount = 0;
-    results.forEach((r) => {
-      if (r.gradePoint !== undefined) {
-        totalGradePoints += r.gradePoint;
-        subjectCount++;
+    results.forEach((result) => {
+      if (result.gradePoint !== undefined) {
+        totalGradePoints += result.gradePoint;
+        subjectCount += 1;
       }
     });
+
     const cgpa =
       subjectCount > 0
         ? (totalGradePoints / subjectCount).toFixed(2)
@@ -225,21 +329,19 @@ router.get('/transcript', async (req, res) => {
 
     const totalAttendance = attendanceRecords.length;
     const presentAttendance = attendanceRecords.filter(
-      (a) => a.status === 'present'
+      (attendance) => attendance.status === 'present'
     ).length;
     const attendanceRate =
       totalAttendance > 0
         ? Math.round((presentAttendance / totalAttendance) * 100)
         : 0;
 
-    // Group results by semester
     const semesterMap = {};
-    results.forEach((r) => {
-      if (!semesterMap[r.semester]) semesterMap[r.semester] = [];
-      semesterMap[r.semester].push(r);
+    results.forEach((result) => {
+      if (!semesterMap[result.semester]) semesterMap[result.semester] = [];
+      semesterMap[result.semester].push(result);
     });
 
-    // Generate PDF
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -250,10 +352,7 @@ router.get('/transcript', async (req, res) => {
 
     doc.pipe(res);
 
-    // ── Header ─────────────────────────────────────────────────────────────────
-    doc
-      .rect(0, 0, doc.page.width, 120)
-      .fill('#0a1628');
+    doc.rect(0, 0, doc.page.width, 120).fill('#0a1628');
 
     doc
       .fillColor('#f0a500')
@@ -272,13 +371,17 @@ router.get('/transcript', async (req, res) => {
     doc
       .fillColor('#aaaaaa')
       .fontSize(10)
-      .text(`Generated on: ${new Date().toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric',
-      })}`, 50, 90, { align: 'center' });
+      .text(
+        `Generated on: ${new Date().toLocaleDateString('en-IN', {
+          day: '2-digit',
+          month: 'long',
+          year: 'numeric',
+        })}`,
+        50,
+        90,
+        { align: 'center' }
+      );
 
-    // ── Student Info ────────────────────────────────────────────────────────────
     doc.moveDown(4);
     doc
       .rect(50, 135, doc.page.width - 100, 130)
@@ -301,44 +404,75 @@ router.get('/transcript', async (req, res) => {
     const rightInfo = [
       ['Department', student.department || 'N/A'],
       ['Semester', student.semester ? `Semester ${student.semester}` : 'N/A'],
-      ['Assigned Teacher', student.assignedTeacher?.name || 'N/A'],
+      ['Current Teachers', getTeacherNamesFromCourses(currentCourses)],
     ];
 
-    leftInfo.forEach(([label, value], i) => {
+    leftInfo.forEach(([label, value], index) => {
       doc
         .fillColor('#666666')
-        .text(`${label}:`, 70, infoY + i * 20)
+        .text(`${label}:`, 70, infoY + index * 20)
         .fillColor('#111111')
-        .text(value, 180, infoY + i * 20);
+        .text(value, 180, infoY + index * 20);
     });
 
-    rightInfo.forEach(([label, value], i) => {
+    rightInfo.forEach(([label, value], index) => {
       doc
         .fillColor('#666666')
-        .text(`${label}:`, 330, infoY + i * 20)
+        .text(`${label}:`, 330, infoY + index * 20)
         .fillColor('#111111')
-        .text(value, 460, infoY + i * 20);
+        .text(value, 460, infoY + index * 20);
     });
 
-    // ── Summary Cards ───────────────────────────────────────────────────────────
     const summaryY = 285;
 
-    // CGPA card
     doc.rect(50, summaryY, 150, 70).fillAndStroke('#0a1628', '#0a1628');
-    doc.fillColor('#f0a500').fontSize(22).font('Helvetica-Bold').text(cgpa, 50, summaryY + 12, { width: 150, align: 'center' });
-    doc.fillColor('#aaaaaa').fontSize(9).font('Helvetica').text('CGPA', 50, summaryY + 45, { width: 150, align: 'center' });
+    doc
+      .fillColor('#f0a500')
+      .fontSize(22)
+      .font('Helvetica-Bold')
+      .text(cgpa, 50, summaryY + 12, { width: 150, align: 'center' });
+    doc
+      .fillColor('#aaaaaa')
+      .fontSize(9)
+      .font('Helvetica')
+      .text('CGPA', 50, summaryY + 45, { width: 150, align: 'center' });
 
-    // Attendance card
     doc.rect(215, summaryY, 150, 70).fillAndStroke('#0a1628', '#0a1628');
-    doc.fillColor('#f0a500').fontSize(22).font('Helvetica-Bold').text(`${attendanceRate}%`, 215, summaryY + 12, { width: 150, align: 'center' });
-    doc.fillColor('#aaaaaa').fontSize(9).font('Helvetica').text('ATTENDANCE', 215, summaryY + 45, { width: 150, align: 'center' });
+    doc
+      .fillColor('#f0a500')
+      .fontSize(22)
+      .font('Helvetica-Bold')
+      .text(`${attendanceRate}%`, 215, summaryY + 12, {
+        width: 150,
+        align: 'center',
+      });
+    doc
+      .fillColor('#aaaaaa')
+      .fontSize(9)
+      .font('Helvetica')
+      .text('ATTENDANCE', 215, summaryY + 45, {
+        width: 150,
+        align: 'center',
+      });
 
-    // Subjects card
     doc.rect(380, summaryY, 170, 70).fillAndStroke('#0a1628', '#0a1628');
-    doc.fillColor('#f0a500').fontSize(22).font('Helvetica-Bold').text(subjectCount.toString(), 380, summaryY + 12, { width: 170, align: 'center' });
-    doc.fillColor('#aaaaaa').fontSize(9).font('Helvetica').text('SUBJECTS COMPLETED', 380, summaryY + 45, { width: 170, align: 'center' });
+    doc
+      .fillColor('#f0a500')
+      .fontSize(22)
+      .font('Helvetica-Bold')
+      .text(subjectCount.toString(), 380, summaryY + 12, {
+        width: 170,
+        align: 'center',
+      });
+    doc
+      .fillColor('#aaaaaa')
+      .fontSize(9)
+      .font('Helvetica')
+      .text('SUBJECTS COMPLETED', 380, summaryY + 45, {
+        width: 170,
+        align: 'center',
+      });
 
-    // ── Results Table ───────────────────────────────────────────────────────────
     let yPos = summaryY + 95;
 
     doc
@@ -357,7 +491,6 @@ router.get('/transcript', async (req, res) => {
         yPos = 50;
       }
 
-      // Semester header
       doc.rect(50, yPos, doc.page.width - 100, 25).fill('#e8edf5');
       doc
         .fillColor('#0a1628')
@@ -366,23 +499,35 @@ router.get('/transcript', async (req, res) => {
         .text(`Semester ${sem}`, 60, yPos + 7);
       yPos += 25;
 
-      // Table header
       doc.rect(50, yPos, doc.page.width - 100, 22).fill('#0a1628');
       const cols = [60, 220, 280, 340, 390, 430, 480, 520];
-      const headers = ['Subject', 'Theory', 'Practical', 'Internal', 'Total', 'Grade', 'GP', 'Status'];
-      headers.forEach((h, i) => {
-        doc.fillColor('#f0a500').fontSize(8).font('Helvetica-Bold').text(h, cols[i], yPos + 7);
+      const headers = [
+        'Subject',
+        'Theory',
+        'Practical',
+        'Internal',
+        'Total',
+        'Grade',
+        'GP',
+        'Status',
+      ];
+
+      headers.forEach((header, index) => {
+        doc
+          .fillColor('#f0a500')
+          .fontSize(8)
+          .font('Helvetica-Bold')
+          .text(header, cols[index], yPos + 7);
       });
       yPos += 22;
 
-      // Table rows
-      semesterMap[sem].forEach((result, idx) => {
+      semesterMap[sem].forEach((result, index) => {
         if (yPos > doc.page.height - 100) {
           doc.addPage();
           yPos = 50;
         }
 
-        const rowColor = idx % 2 === 0 ? '#ffffff' : '#f8f9fa';
+        const rowColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
         doc.rect(50, yPos, doc.page.width - 100, 20).fill(rowColor);
 
         const total =
@@ -403,27 +548,40 @@ router.get('/transcript', async (req, res) => {
           result.status.toUpperCase(),
         ];
 
-        rowData.forEach((d, i) => {
+        rowData.forEach((value, rowIndex) => {
           let color = '#333333';
-          if (i === 7) color = result.status === 'pass' ? '#2e7d32' : '#c62828';
-          if (i === 5) color = '#0a1628';
-          doc.fillColor(color).fontSize(8).font('Helvetica').text(d, cols[i], yPos + 6, { width: i === 0 ? 155 : 55, ellipsis: true });
+          if (rowIndex === 7) {
+            color = result.status === 'pass' ? '#2e7d32' : '#c62828';
+          }
+          if (rowIndex === 5) color = '#0a1628';
+
+          doc
+            .fillColor(color)
+            .fontSize(8)
+            .font('Helvetica')
+            .text(value, cols[rowIndex], yPos + 6, {
+              width: rowIndex === 0 ? 155 : 55,
+              ellipsis: true,
+            });
         });
 
         yPos += 20;
       });
 
-      // Semester SGPA
       const semResults = semesterMap[sem];
       const sgpa = (
-        semResults.reduce((a, r) => a + (r.gradePoint || 0), 0) /
+        semResults.reduce((acc, result) => acc + (result.gradePoint || 0), 0) /
         semResults.length
       ).toFixed(2);
+
       doc
         .fillColor('#555555')
         .fontSize(9)
         .font('Helvetica-Bold')
-        .text(`Semester GPA: ${sgpa}`, 50, yPos + 5, { align: 'right', width: doc.page.width - 100 });
+        .text(`Semester GPA: ${sgpa}`, 50, yPos + 5, {
+          align: 'right',
+          width: doc.page.width - 100,
+        });
       yPos += 25;
     }
 
@@ -436,26 +594,19 @@ router.get('/transcript', async (req, res) => {
       yPos += 40;
     }
 
-    // ── Footer ──────────────────────────────────────────────────────────────────
     if (yPos > doc.page.height - 80) {
       doc.addPage();
-      yPos = 50;
     }
 
     doc
-      .moveTo(50, yPos + 10)
-      .lineTo(doc.page.width - 50, yPos + 10)
-      .stroke('#cccccc');
-
-    doc
-      .fillColor('#888888')
-      .fontSize(8)
+      .fillColor('#999999')
+      .fontSize(9)
       .font('Helvetica')
       .text(
-        'This is a computer-generated transcript. No signature required.',
+        'This transcript was generated by EduTrack. Please contact the institution admin for corrections.',
         50,
-        yPos + 20,
-        { align: 'center' }
+        doc.page.height - 50,
+        { align: 'center', width: doc.page.width - 100 }
       );
 
     doc.end();

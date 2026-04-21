@@ -1,50 +1,95 @@
 const express = require('express');
 const router = express.Router();
+
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Result = require('../models/Result');
+const SemesterCourse = require('../models/SemesterCourse');
 const { protect, authorize } = require('../middleware/auth');
+const {
+  buildDepartmentMatch,
+  buildTeacherStudentQuery,
+  getSemesterCourses,
+} = require('../utils/academic');
 
 router.use(protect, authorize('teacher'));
 
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+const getAssignedCourses = (teacherId) =>
+  getSemesterCourses({
+    teacherId,
+    populateTeacher: false,
+  });
+
+const buildCourseStudentQuery = (course) => ({
+  role: 'student',
+  department: buildDepartmentMatch(course.department),
+  semester: course.semester,
+});
+
+const getAssignedCourse = async (teacherId, courseId) =>
+  SemesterCourse.findOne({
+    _id: courseId,
+    teacher: teacherId,
+    isActive: true,
+  });
 
 router.get('/stats', async (req, res) => {
   try {
     const teacherId = req.user._id;
+    const assignedCourses = await getAssignedCourses(teacherId);
+    const studentQuery = buildTeacherStudentQuery(assignedCourses);
 
-    const [studentCount, attendanceCount, resultCount] = await Promise.all([
-      User.countDocuments({ assignedTeacher: teacherId, role: 'student' }),
-      Attendance.countDocuments({ teacher: teacherId }),
-      Result.countDocuments({ teacher: teacherId }),
-    ]);
-
-    const students = await User.find({
-      assignedTeacher: teacherId,
-      role: 'student',
-    })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select('name rollNumber department semester');
+    const [studentCount, attendanceCount, resultCount, recentStudents] =
+      await Promise.all([
+        User.countDocuments(studentQuery),
+        Attendance.countDocuments({ teacher: teacherId }),
+        Result.countDocuments({ teacher: teacherId }),
+        User.find(studentQuery)
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .select('name rollNumber department semester'),
+      ]);
 
     res.status(200).json({
       success: true,
-      data: { studentCount, attendanceCount, resultCount, recentStudents: students },
+      data: {
+        studentCount,
+        attendanceCount,
+        resultCount,
+        assignedCourseCount: assignedCourses.length,
+        assignedCourses,
+        recentStudents,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// ─── STUDENTS ─────────────────────────────────────────────────────────────────
+router.get('/courses', async (req, res) => {
+  try {
+    const courses = await SemesterCourse.find({
+      teacher: req.user._id,
+      isActive: true,
+    }).sort({ semester: 1, title: 1 });
 
-// GET /api/teacher/students — get all students under this teacher
+    const coursesWithCounts = await Promise.all(
+      courses.map(async (course) => ({
+        ...course.toObject(),
+        studentCount: await User.countDocuments(buildCourseStudentQuery(course)),
+      }))
+    );
+
+    res.status(200).json({ success: true, data: coursesWithCounts });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/students', async (req, res) => {
   try {
-    const students = await User.find({
-      assignedTeacher: req.user._id,
-      role: 'student',
-    })
+    const assignedCourses = await getAssignedCourses(req.user._id);
+    const students = await User.find(buildTeacherStudentQuery(assignedCourses))
       .sort({ name: 1 })
       .select('-password');
 
@@ -54,15 +99,13 @@ router.get('/students', async (req, res) => {
   }
 });
 
-// ─── ATTENDANCE ───────────────────────────────────────────────────────────────
-
-// GET /api/teacher/attendance
 router.get('/attendance', async (req, res) => {
   try {
-    const { studentId, subject, startDate, endDate } = req.query;
+    const { studentId, subject, courseId, startDate, endDate } = req.query;
 
     const filter = { teacher: req.user._id };
     if (studentId) filter.student = studentId;
+    if (courseId) filter.semesterCourse = courseId;
     if (subject) filter.subject = subject;
     if (startDate || endDate) {
       filter.date = {};
@@ -80,57 +123,70 @@ router.get('/attendance', async (req, res) => {
   }
 });
 
-// POST /api/teacher/attendance — mark attendance for multiple students
 router.post('/attendance', async (req, res) => {
   try {
-    const { records } = req.body;
-    // records: [{studentId, subject, date, status, remarks}]
+    const { courseId, date, records } = req.body;
 
-    if (!records || !Array.isArray(records) || records.length === 0) {
+    if (!courseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assigned course is required.',
+      });
+    }
+
+    if (!Array.isArray(records) || records.length === 0) {
       return res
         .status(400)
         .json({ success: false, message: 'Records array is required.' });
     }
 
-    // Verify all students belong to this teacher
-    const studentIds = records.map((r) => r.studentId);
+    const course = await getAssignedCourse(req.user._id, courseId);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'This course is not assigned to you.',
+      });
+    }
+
+    const studentIds = records.map((record) => record.studentId);
     const students = await User.find({
       _id: { $in: studentIds },
-      assignedTeacher: req.user._id,
-    });
+      ...buildCourseStudentQuery(course),
+    }).select('_id');
 
     if (students.length !== studentIds.length) {
       return res.status(403).json({
         success: false,
-        message: 'Some students are not under your supervision.',
+        message: 'Some students are not eligible for this course.',
       });
     }
 
     const results = [];
     const errors = [];
+    const dateObj = new Date(date || new Date());
+    dateObj.setHours(0, 0, 0, 0);
 
     for (const record of records) {
       try {
-        const dateObj = new Date(record.date);
-        dateObj.setHours(0, 0, 0, 0);
-
         const attendance = await Attendance.findOneAndUpdate(
           {
             student: record.studentId,
-            subject: record.subject,
+            subject: course.title,
             date: dateObj,
           },
           {
             student: record.studentId,
             teacher: req.user._id,
-            subject: record.subject,
+            semesterCourse: course._id,
+            subject: course.title,
             date: dateObj,
             status: record.status || 'present',
             markedBy: 'teacher',
             remarks: record.remarks || '',
           },
-          { upsert: true, new: true }
+          { upsert: true, new: true, runValidators: true }
         );
+
         results.push(attendance);
       } catch (err) {
         errors.push({ studentId: record.studentId, error: err.message });
@@ -148,7 +204,6 @@ router.post('/attendance', async (req, res) => {
   }
 });
 
-// PUT /api/teacher/attendance/:id
 router.put('/attendance/:id', async (req, res) => {
   try {
     const { status, remarks } = req.body;
@@ -171,7 +226,6 @@ router.put('/attendance/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/teacher/attendance/:id
 router.delete('/attendance/:id', async (req, res) => {
   try {
     const record = await Attendance.findOneAndDelete({
@@ -193,7 +247,6 @@ router.delete('/attendance/:id', async (req, res) => {
   }
 });
 
-// GET /api/teacher/attendance/summary/:studentId
 router.get('/attendance/summary/:studentId', async (req, res) => {
   try {
     const records = await Attendance.find({
@@ -202,12 +255,12 @@ router.get('/attendance/summary/:studentId', async (req, res) => {
     });
 
     const summary = {};
-    records.forEach((r) => {
-      if (!summary[r.subject]) {
-        summary[r.subject] = { total: 0, present: 0, absent: 0, late: 0 };
+    records.forEach((record) => {
+      if (!summary[record.subject]) {
+        summary[record.subject] = { total: 0, present: 0, absent: 0, late: 0 };
       }
-      summary[r.subject].total++;
-      summary[r.subject][r.status]++;
+      summary[record.subject].total += 1;
+      summary[record.subject][record.status] += 1;
     });
 
     res.status(200).json({ success: true, data: summary });
@@ -216,17 +269,15 @@ router.get('/attendance/summary/:studentId', async (req, res) => {
   }
 });
 
-// ─── RESULTS ──────────────────────────────────────────────────────────────────
-
-// GET /api/teacher/results
 router.get('/results', async (req, res) => {
   try {
-    const { studentId, semester, academicYear } = req.query;
+    const { studentId, semester, academicYear, courseId } = req.query;
 
     const filter = { teacher: req.user._id };
     if (studentId) filter.student = studentId;
     if (semester) filter.semester = semester;
     if (academicYear) filter.academicYear = academicYear;
+    if (courseId) filter.semesterCourse = courseId;
 
     const results = await Result.find(filter)
       .populate('student', 'name rollNumber department semester')
@@ -238,39 +289,58 @@ router.get('/results', async (req, res) => {
   }
 });
 
-// POST /api/teacher/results
 router.post('/results', async (req, res) => {
   try {
-    const { studentId, subject, semester, academicYear, marks, totalMarks, remarks } =
+    const { studentId, courseId, academicYear, marks, totalMarks, remarks } =
       req.body;
 
-    // Verify student belongs to this teacher
+    if (!studentId || !courseId || !academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student, assigned course, and academic year are required.',
+      });
+    }
+
+    const course = await getAssignedCourse(req.user._id, courseId);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'This course is not assigned to you.',
+      });
+    }
+
     const student = await User.findOne({
       _id: studentId,
-      assignedTeacher: req.user._id,
+      ...buildCourseStudentQuery(course),
     });
 
     if (!student) {
       return res.status(403).json({
         success: false,
-        message: 'Student not under your supervision.',
+        message: 'Student is not eligible for this course.',
       });
     }
 
     const result = await Result.findOneAndUpdate(
-      { student: studentId, subject, semester, academicYear },
+      {
+        student: studentId,
+        subject: course.title,
+        semester: course.semester,
+        academicYear,
+      },
       {
         student: studentId,
         teacher: req.user._id,
-        subject,
-        semester,
+        semesterCourse: course._id,
+        subject: course.title,
+        semester: course.semester,
         academicYear,
         marks: marks || { theory: 0, practical: 0, internal: 0 },
         totalMarks: totalMarks || { theory: 100, practical: 50, internal: 30 },
         remarks: remarks || '',
       },
       { upsert: true, new: true, runValidators: true }
-    ).populate('student', 'name rollNumber department');
+    ).populate('student', 'name rollNumber department semester');
 
     res.status(200).json({ success: true, data: result });
   } catch (error) {
@@ -278,7 +348,6 @@ router.post('/results', async (req, res) => {
   }
 });
 
-// PUT /api/teacher/results/:id
 router.put('/results/:id', async (req, res) => {
   try {
     const { marks, totalMarks, remarks } = req.body;
@@ -298,7 +367,7 @@ router.put('/results/:id', async (req, res) => {
     result.totalMarks = totalMarks || result.totalMarks;
     result.remarks = remarks !== undefined ? remarks : result.remarks;
 
-    await result.save(); // triggers pre-save grade calc
+    await result.save();
     await result.populate('student', 'name rollNumber department');
 
     res.status(200).json({ success: true, data: result });
@@ -307,7 +376,6 @@ router.put('/results/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/teacher/results/:id
 router.delete('/results/:id', async (req, res) => {
   try {
     const result = await Result.findOneAndDelete({

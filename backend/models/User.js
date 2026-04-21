@@ -41,6 +41,12 @@ const userSchema = new mongoose.Schema(
       ref: 'User',
       default: null,
     },
+    assignedTeachers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
     subjects: [{ type: String, trim: true }],
 
     isActive: { type: Boolean, default: true },

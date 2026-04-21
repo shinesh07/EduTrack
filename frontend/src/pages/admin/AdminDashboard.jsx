@@ -29,7 +29,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     api.get('/admin/stats')
-      .then((r) => setStats(r.data.data))
+      .then((response) => setStats(response.data.data))
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -44,15 +44,13 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-8 animate-fade-in">
-      {/* Header */}
       <div>
         <h1 className="text-3xl font-display font-bold text-navy-900">
           Good {getGreeting()}, {user?.name?.split(' ')[0]} 👋
         </h1>
-        <p className="text-gray-500 mt-1">Here's an overview of your institution today.</p>
+        <p className="text-gray-500 mt-1">Here&apos;s an overview of your institution today.</p>
       </div>
 
-      {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon="👩‍🏫"
@@ -84,9 +82,37 @@ export default function AdminDashboard() {
         />
       </div>
 
-      {/* Tables row */}
+      <div
+        className={`card border-2 ${
+          stats?.semesterEditEnabled
+            ? 'border-emerald-200 bg-emerald-50'
+            : 'border-amber-200 bg-amber-50'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-navy-900">Semester Change Window</p>
+            <p className="text-sm text-gray-600 mt-1">
+              {stats?.semesterEditEnabled
+                ? 'Students can currently move to their next semester.'
+                : 'Students are currently locked from changing semester.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-xs text-gray-500">Configured semester courses</p>
+              <p className="text-2xl font-display font-bold text-navy-800">
+                {stats?.semesterCourses ?? 0}
+              </p>
+            </div>
+            <button onClick={() => navigate('/admin/semester-courses')} className="btn-secondary">
+              Open Setup
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Recent Students */}
         <div className="card">
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xl font-display font-semibold text-navy-900">Recent Students</h2>
@@ -99,20 +125,19 @@ export default function AdminDashboard() {
           </div>
           {stats?.recentStudents?.length > 0 ? (
             <div className="space-y-3">
-              {stats.recentStudents.map((s) => (
-                <div key={s._id} className="flex items-center gap-3 py-2">
-                  <div className="w-9 h-9 bg-navy-100 rounded-full flex items-center justify-center
-                                  text-navy-700 font-bold text-sm flex-shrink-0">
-                    {s.name.charAt(0)}
+              {stats.recentStudents.map((student) => (
+                <div key={student._id} className="flex items-center gap-3 py-2">
+                  <div className="w-9 h-9 bg-navy-100 rounded-full flex items-center justify-center text-navy-700 font-bold text-sm flex-shrink-0">
+                    {student.name.charAt(0)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{s.name}</p>
+                    <p className="text-sm font-semibold text-gray-800 truncate">{student.name}</p>
                     <p className="text-xs text-gray-400 truncate">
-                      {s.rollNumber || s.email} · {s.department || 'No dept'}
+                      {student.rollNumber || student.email} · {student.department || 'No dept'}
                     </p>
                   </div>
                   <span className="text-xs text-gray-400 flex-shrink-0">
-                    {new Date(s.createdAt).toLocaleDateString()}
+                    {new Date(student.createdAt).toLocaleDateString()}
                   </span>
                 </div>
               ))}
@@ -122,7 +147,6 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        {/* Recent Results */}
         <div className="card">
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xl font-display font-semibold text-navy-900">Recent Results</h2>
@@ -135,25 +159,31 @@ export default function AdminDashboard() {
           </div>
           {stats?.recentResults?.length > 0 ? (
             <div className="space-y-3">
-              {stats.recentResults.map((r) => (
-                <div key={r._id} className="flex items-center gap-3 py-2">
+              {stats.recentResults.map((result) => (
+                <div key={result._id} className="flex items-center gap-3 py-2">
                   <div
-                    className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0
-                      ${r.grade === 'F' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                      result.grade === 'F' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
+                    }`}
                   >
-                    {r.grade}
+                    {result.grade}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-gray-800 truncate">
-                      {r.student?.name}
+                      {result.student?.name}
                     </p>
                     <p className="text-xs text-gray-400 truncate">
-                      {r.subject} · Sem {r.semester}
+                      {result.subject} · Sem {result.semester}
                     </p>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0
-                    ${r.status === 'pass' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                    {r.status}
+                  <span
+                    className={`text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${
+                      result.status === 'pass'
+                        ? 'bg-green-50 text-green-700'
+                        : 'bg-red-50 text-red-700'
+                    }`}
+                  >
+                    {result.status}
                   </span>
                 </div>
               ))}
@@ -164,24 +194,23 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Quick actions */}
       <div className="card">
         <h2 className="text-xl font-display font-semibold text-navy-900 mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
             { icon: '➕', label: 'Add Teacher', path: '/admin/teachers' },
             { icon: '🎓', label: 'Add Student', path: '/admin/students' },
+            { icon: '🗂️', label: 'Semester Setup', path: '/admin/semester-courses' },
             { icon: '📋', label: 'View Attendance', path: '/admin/attendance' },
             { icon: '📈', label: 'View Results', path: '/admin/results' },
-          ].map((a) => (
+          ].map((action) => (
             <button
-              key={a.label}
-              onClick={() => navigate(a.path)}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-navy-50
-                         hover:border-gold-500 hover:bg-gold-50 transition-all duration-200"
+              key={action.label}
+              onClick={() => navigate(action.path)}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-navy-50 hover:border-gold-500 hover:bg-gold-50 transition-all duration-200"
             >
-              <span className="text-2xl">{a.icon}</span>
-              <span className="text-xs font-semibold text-navy-700">{a.label}</span>
+              <span className="text-2xl">{action.icon}</span>
+              <span className="text-xs font-semibold text-navy-700">{action.label}</span>
             </button>
           ))}
         </div>
@@ -200,8 +229,8 @@ function EmptyState({ icon, msg }) {
 }
 
 function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'morning';
-  if (h < 17) return 'afternoon';
+  const hours = new Date().getHours();
+  if (hours < 12) return 'morning';
+  if (hours < 17) return 'afternoon';
   return 'evening';
 }

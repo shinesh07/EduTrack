@@ -9,6 +9,33 @@ const { sendVerificationEmail } = require('../config/email');
 const signToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 const getBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
+const TEACHER_POPULATE = 'name email department subjects';
+
+const normalizeTeacherRefs = (teachers = []) => {
+  const map = new Map();
+  teachers
+    .filter(Boolean)
+    .forEach((teacher) => {
+      const key = String(teacher?._id || teacher);
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, teacher);
+      }
+    });
+  return Array.from(map.values());
+};
+
+const buildAssignedTeacherPayload = (user) => {
+  const assignedTeachers = normalizeTeacherRefs([
+    ...(Array.isArray(user.assignedTeachers) ? user.assignedTeachers : []),
+    user.assignedTeacher,
+  ]);
+
+  return {
+    assignedTeacher: assignedTeachers[0] || null,
+    assignedTeachers,
+  };
+};
 
 // ── POST /api/auth/signup ──────────────────────────────────────────
 // Self-registration for students and teachers
@@ -179,8 +206,8 @@ router.post('/login', async (req, res) => {
       department: user.department,
       semester: user.semester,
       subjects: user.subjects,
-      assignedTeacher: user.assignedTeacher,
       isVerified: user.isVerified,
+      ...buildAssignedTeacherPayload(user),
     };
 
     res.status(200).json({ success: true, token, user: userData });
@@ -192,10 +219,16 @@ router.post('/login', async (req, res) => {
 // ── GET /api/auth/me ───────────────────────────────────────────────
 router.get('/me', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate(
-      'assignedTeacher',
-      'name email department subjects'
-    );
+    const userDoc = await User.findById(req.user._id)
+      .populate('assignedTeacher', TEACHER_POPULATE)
+      .populate('assignedTeachers', TEACHER_POPULATE);
+    const user = userDoc?.toObject ? userDoc.toObject() : userDoc;
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    Object.assign(user, buildAssignedTeacherPayload(user));
     res.status(200).json({ success: true, user });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
