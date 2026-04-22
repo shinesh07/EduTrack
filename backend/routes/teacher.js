@@ -33,6 +33,15 @@ const getAssignedCourse = async (teacherId, courseId) =>
     isActive: true,
   });
 
+const getDayRange = (dateInput) => {
+  const start = dateInput ? new Date(`${dateInput}T00:00:00`) : new Date();
+  if (Number.isNaN(start.getTime())) return null;
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start, end };
+};
+
 router.get('/stats', async (req, res) => {
   try {
     const teacherId = req.user._id;
@@ -101,13 +110,20 @@ router.get('/students', async (req, res) => {
 
 router.get('/attendance', async (req, res) => {
   try {
-    const { studentId, subject, courseId, startDate, endDate } = req.query;
+    const { studentId, subject, courseId, startDate, endDate, date } = req.query;
 
     const filter = { teacher: req.user._id };
     if (studentId) filter.student = studentId;
     if (courseId) filter.semesterCourse = courseId;
     if (subject) filter.subject = subject;
-    if (startDate || endDate) {
+
+    if (date) {
+      const dayRange = getDayRange(date);
+      if (!dayRange) {
+        return res.status(400).json({ success: false, message: 'Invalid date filter.' });
+      }
+      filter.date = { $gte: dayRange.start, $lt: dayRange.end };
+    } else if (startDate || endDate) {
       filter.date = {};
       if (startDate) filter.date.$gte = new Date(startDate);
       if (endDate) filter.date.$lte = new Date(endDate);
@@ -115,9 +131,67 @@ router.get('/attendance', async (req, res) => {
 
     const records = await Attendance.find(filter)
       .populate('student', 'name rollNumber department semester')
+      .populate('semesterCourse', 'title code department semester')
       .sort({ date: -1 });
 
     res.status(200).json({ success: true, data: records });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/attendance/session', async (req, res) => {
+  try {
+    const { courseId, date } = req.query;
+
+    if (!courseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assigned course is required.',
+      });
+    }
+
+    const course = await getAssignedCourse(req.user._id, courseId);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'This course is not assigned to you.',
+      });
+    }
+
+    const dayRange = getDayRange(date);
+    if (!dayRange) {
+      return res.status(400).json({ success: false, message: 'Invalid session date.' });
+    }
+
+    const [students, records] = await Promise.all([
+      User.find(buildCourseStudentQuery(course))
+        .sort({ name: 1 })
+        .select('name rollNumber department semester'),
+      Attendance.find({
+        teacher: req.user._id,
+        semesterCourse: course._id,
+        date: { $gte: dayRange.start, $lt: dayRange.end },
+      }).sort({ createdAt: -1 }),
+    ]);
+
+    const recordMap = new Map(
+      records.map((record) => [String(record.student), record])
+    );
+
+    const roster = students.map((student) => ({
+      ...student.toObject(),
+      attendance: recordMap.get(String(student._id)) || null,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        course,
+        date: dayRange.start,
+        students: roster,
+      },
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -210,9 +284,11 @@ router.put('/attendance/:id', async (req, res) => {
 
     const record = await Attendance.findOneAndUpdate(
       { _id: req.params.id, teacher: req.user._id },
-      { status, remarks },
+      { status, remarks, markedBy: 'teacher' },
       { new: true }
-    ).populate('student', 'name rollNumber');
+    )
+      .populate('student', 'name rollNumber')
+      .populate('semesterCourse', 'title code department semester');
 
     if (!record) {
       return res

@@ -144,7 +144,12 @@ export default function Login() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <label className="block text-sm font-medium text-gray-700">Password</label>
+                <Link to="/forgot-password" className="text-xs font-semibold text-navy-700 hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password" placeholder="••••••••"
                 value={form.password} onChange={(e) => updateField('password', e.target.value)}

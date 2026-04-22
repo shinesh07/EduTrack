@@ -97,6 +97,21 @@ function verifyButton(url) {
     </div>`;
 }
 
+function resetButton(url) {
+  return `
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${url}" style="display:inline-block;background:#0a1628;color:#ffffff;font-weight:700;
+         font-size:15px;text-decoration:none;padding:14px 36px;border-radius:10px;">
+        Reset My Password
+      </a>
+    </div>
+    <p style="color:#888;font-size:12px;margin:0 0 6px;">Or copy this link:</p>
+    <p style="color:#3452a0;font-size:12px;word-break:break-all;margin:0 0 20px;">${url}</p>
+    <div style="background:#eef3fb;border:1px solid #c9d6f0;border-radius:10px;padding:12px 16px;">
+      <p style="color:#26457c;font-size:13px;margin:0;">This link expires in <strong>1 hour</strong>.</p>
+    </div>`;
+}
+
 function getAppUrl(baseUrl) {
   return (process.env.CLIENT_URL || baseUrl || 'http://localhost:3000').replace(/\/$/, '');
 }
@@ -158,4 +173,22 @@ async function sendAdminCreatedEmail({ toEmail, name, token, role, tempPassword,
   });
 }
 
-module.exports = { sendVerificationEmail, sendAdminCreatedEmail };
+async function sendPasswordResetEmail({ toEmail, name, token, baseUrl }) {
+  const url = `${getAppUrl(baseUrl)}/reset-password?token=${token}`;
+
+  const body = `
+    <p style="color:#0a1628;font-size:20px;font-weight:600;margin:0 0 8px;">Hello ${name},</p>
+    <p style="color:#555;font-size:14px;line-height:1.6;margin:0 0 20px;">
+      We received a request to reset your EduTrack password. Use the secure link below to choose a new one.
+    </p>
+    ${resetButton(url)}`;
+
+  await createTransporter().sendMail({
+    from: getFrom(),
+    to: toEmail,
+    subject: '[EduTrack] Reset your password',
+    html: baseTemplate(body),
+  });
+}
+
+module.exports = { sendVerificationEmail, sendAdminCreatedEmail, sendPasswordResetEmail };

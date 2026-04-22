@@ -2,6 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Home from './pages/Home';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import VerifyEmail from './pages/VerifyEmail';
 import Signup from './pages/Signup';
 import AdminLayout from './pages/admin/AdminLayout';
@@ -53,6 +55,11 @@ export default function App() {
         path="/login"
         element={user ? <Navigate to={`/${user.role}`} replace /> : <Login />}
       />
+      <Route
+        path="/forgot-password"
+        element={user ? <Navigate to={`/${user.role}`} replace /> : <ForgotPassword />}
+      />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       {/* Admin routes */}
       <Route

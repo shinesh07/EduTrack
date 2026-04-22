@@ -21,7 +21,9 @@ api.interceptors.response.use(
       requestUrl.includes('/auth/login') ||
       requestUrl.includes('/auth/signup') ||
       requestUrl.includes('/auth/verify-email') ||
-      requestUrl.includes('/auth/resend-verification');
+      requestUrl.includes('/auth/resend-verification') ||
+      requestUrl.includes('/auth/forgot-password') ||
+      requestUrl.includes('/auth/reset-password');
 
     if (err.response?.status === 401 && !skipLoginRedirect) {
       localStorage.removeItem('token');

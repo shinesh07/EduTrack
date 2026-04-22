@@ -63,7 +63,7 @@ export default function TeacherCourses() {
 
               <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
                 <p className="text-sm text-gray-600">
-                  Use this course when marking attendance or entering results for students in {course.department}, Semester {course.semester}.
+                  Use this course when managing individual attendance or entering results for students in {course.department}, Semester {course.semester}.
                 </p>
               </div>
             </div>

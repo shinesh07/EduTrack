@@ -94,7 +94,7 @@ export default function TeacherDashboard() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
             { icon: '📚', label: 'View Courses', path: '/teacher/courses' },
-            { icon: '📋', label: 'Mark Attendance', path: '/teacher/attendance' },
+            { icon: '📋', label: 'Manage Attendance', path: '/teacher/attendance' },
             { icon: '📝', label: 'Enter Results', path: '/teacher/results' },
             { icon: '👥', label: 'View Students', path: '/teacher/students' },
           ].map((action) => (

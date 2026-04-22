@@ -4,12 +4,14 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
-const { sendVerificationEmail } = require('../config/email');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('../config/email');
 
 const signToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 const getBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
 const TEACHER_POPULATE = 'name email department subjects';
+const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const normalizeTeacherRefs = (teachers = []) => {
   const map = new Map();
@@ -216,6 +218,51 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// ── POST /api/auth/forgot-password ────────────────────────────────
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const email = req.body?.email?.trim()?.toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const successMessage = 'If an account exists for this email, a password reset link has been sent.';
+    const user = await User.findOne({ email }).select('+passwordResetToken +passwordResetTokenExpiry');
+
+    if (!user) {
+      return res.status(200).json({ success: true, message: successMessage });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    user.passwordResetToken = hashToken(resetToken);
+    user.passwordResetTokenExpiry = new Date(Date.now() + PASSWORD_RESET_WINDOW_MS);
+    await user.save({ validateBeforeSave: false });
+
+    try {
+      await sendPasswordResetEmail({
+        toEmail: user.email,
+        name: user.name,
+        token: resetToken,
+        baseUrl: getBaseUrl(req),
+      });
+    } catch (emailErr) {
+      console.error('Password reset email failed:', emailErr.message);
+      user.passwordResetToken = undefined;
+      user.passwordResetTokenExpiry = undefined;
+      await user.save({ validateBeforeSave: false });
+      return res.status(500).json({
+        success: false,
+        message: 'We could not send the password reset email right now. Please try again shortly.',
+      });
+    }
+
+    res.status(200).json({ success: true, message: successMessage });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ── GET /api/auth/me ───────────────────────────────────────────────
 router.get('/me', protect, async (req, res) => {
   try {
@@ -265,6 +312,46 @@ router.get('/verify-email', async (req, res) => {
     await user.save();
 
     res.status(200).json({ success: true, message: 'Email verified! You can now log in.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── POST /api/auth/reset-password ─────────────────────────────────
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Reset token and new password are required.' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+    }
+
+    const user = await User.findOne({ passwordResetToken: hashToken(token) }).select(
+      '+password +passwordResetToken +passwordResetTokenExpiry'
+    );
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'This reset link is invalid or has already been used.' });
+    }
+
+    if (!user.passwordResetTokenExpiry || user.passwordResetTokenExpiry < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: 'This reset link has expired. Please request a new one.',
+        expired: true,
+      });
+    }
+
+    user.password = newPassword;
+    user.passwordResetToken = undefined;
+    user.passwordResetTokenExpiry = undefined;
+    await user.save();
+
+    res.status(200).json({ success: true, message: 'Password reset successful. You can now log in.' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
